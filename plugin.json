@@ -15,7 +15,7 @@
     {
       "slug": "Haptik",
       "name": "Haptik",
-      "description": "Scanned-synthesis oscillator: a slow mass-spring ring scanned at audio rate",
+      "description": "Scanned-synthesis oscillator: a mass-spring ring scanned at audio rate",
       "manualUrl": "",
       "modularGridUrl": "",
       "tags": [
