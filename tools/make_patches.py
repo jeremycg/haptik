@@ -78,21 +78,21 @@ def write_patch(name, modules, cables, master_id):
 # ── 1. Plucked, settling ──────────────────────────────────────────────────────
 def patch_plucked():
     h = haptik(hp(excite=1, damp=0.35, couple=0.3), [0, 0])
-    a = audio([14, 0])
+    a = audio([18, 0])   # Haptik is 18 HP wide; place downstream at x >= 18
     cs = [cable(h["id"], 0, a["id"], 0, 0), cable(h["id"], 0, a["id"], 1, 1)]
     write_patch("haptik_1_plucked.vcv", [h, a], cs, a["id"])
 
 # ── 2. Drone (DAMP=0 → seed bump rings forever) ───────────────────────────────
 def patch_drone():
     h = haptik(hp(excite=2, damp=0.0, couple=0.6), [0, 0])
-    a = audio([14, 0])
+    a = audio([18, 0])
     cs = [cable(h["id"], 0, a["id"], 0, 0), cable(h["id"], 0, a["id"], 1, 1)]
     write_patch("haptik_2_drone.vcv", [h, a], cs, a["id"])
 
 # ── 3. Frozen wavetable (FREEZE on; play V/OCT) ───────────────────────────────
 def patch_frozen():
     h = haptik(hp(excite=1, damp=0.35, couple=0.3, freeze=1.0), [0, 0])
-    a = audio([14, 0])
+    a = audio([18, 0])
     cs = [cable(h["id"], 0, a["id"], 0, 0), cable(h["id"], 0, a["id"], 1, 1)]
     write_patch("haptik_3_frozen.vcv", [h, a], cs, a["id"])
 
@@ -100,8 +100,8 @@ def patch_frozen():
 def patch_driven():
     vco = {"id": uid(), "plugin": "Fundamental", "model": "VCO", "version": "2.6.4",
            "params": [{"id": 2, "value": 0.0}], "pos": [0, 0]}
-    h = haptik(hp(excite=1, damp=0.4, couple=0.3, inject=0.6), [10, 0])
-    a = audio([24, 0])
+    h = haptik(hp(excite=1, damp=0.4, couple=0.3, inject=0.6), [10, 0])  # VCO is 10 HP
+    a = audio([28, 0])   # Haptik spans 10..28
     cs = [
         cable(vco["id"], 2, h["id"], 6, 0),   # VCO SAW -> Haptik EXT IN
         cable(h["id"], 0, a["id"], 0, 1),     # Haptik OUT -> L
