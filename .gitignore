@@ -11,3 +11,9 @@ plugin.dylib
 
 # Claude Code local settings
 .claude/
+
+# Internal design/build notes (not published)
+HAPTIK_implementation_plan.md
+
+# Output of tools/panel_diagram.py
+haptik_panel.png
