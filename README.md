@@ -115,9 +115,13 @@ them into the Windows Rack patches folder if present):
   ignored so plucking can't alter the held waveform (the scan keeps reading it).
 - Excitations are zero-mean, so a pluck adds shape but no DC step — no click/thump
   through the output DC-blocker on each trigger.
-- Stability is structural: with COUPLE ≤ 0.9 the symplectic-Euler step cannot blow
-  up. **Do not raise that cap.** `tools/stability_test.cpp` verifies the no-blow-up
-  invariant and pitch accuracy offline:
+- Stability has two parts. The **homogeneous** system is unconditionally stable
+  with COUPLE ≤ 0.9 (ω_max = √(kCtr + 4·kSpr) < 2 for symplectic Euler) — **do not
+  raise that cap.** But external forcing (TRIG, EXT IN) with DAMP=0 (lossless) can
+  pump energy without bound, so `y[]`/`v[]` are additionally hard-clamped to ±16 —
+  never reached in normal play, it just turns runaway into bounded saturation
+  instead of NaN. `tools/stability_test.cpp` checks both (homogeneous sweep and a
+  forced/lossless case) plus pitch:
   `g++ -O2 -o /tmp/t tools/stability_test.cpp && /tmp/t` (exit 0 = pass).
 
 ## References

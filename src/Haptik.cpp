@@ -57,6 +57,13 @@ struct Haptik : Module {
     dsp::TRCFilter<float> dcBlock;  // fixed internal DC blocker on OUT
     float lastFs = 0.f;             // detects SR change to refresh dcBlock cutoff
 
+    // Display snapshot: the audio thread refreshes this ~45 Hz; the UI thread reads
+    // it instead of the live y[] (which churns every sample). Float tearing during
+    // the brief copy is harmless for a visualiser, and the read no longer races a
+    // per-sample writer.
+    float dispY[MAX_N] = {};
+    int   dispN = 64, dispDriver = 0, dispClock = 0;
+
     // ─── Tunable constants ──────────────────────────────────────────────────
     static constexpr float DAMP_MAX_HZ = 800.f;
     static constexpr float OUT_GAIN    = 1.0f;
@@ -65,6 +72,7 @@ struct Haptik : Module {
     static constexpr float BUMP_FRAC   = 0.125f;  // bump half-width = N * frac
     static constexpr float CV_DEPTH        = 0.1f;   // ±5V CV → ±0.5 at full attenuverter
     static constexpr float DRIVE_KEEPALIVE = 0.05f;  // continuous-drive noise amount (EXCITE=3)
+    static constexpr float STATE_MAX       = 16.f;   // safety clamp on y[]/v[] (forced/lossless guard)
 
     Haptik() {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
@@ -102,7 +110,11 @@ struct Haptik : Module {
         configOutput(MOTION_OUTPUT, "Motion (mass 0 displacement, audio-rate CV)");
     }
 
-    void onReset() override { last_N = -1; }   // force a clean lattice reseed on Initialize
+    void onReset() override {
+        last_N = -1;        // force a clean lattice reseed (y/v/scanPhase) on next process()
+        trig.reset();       // clear trigger edge state
+        dcBlock.reset();    // clear DC-blocker filter state
+    }
 
     // Excitation writes displacement y[] (a "pluck"). amt is the inject amount.
     void applyExcite(int shape, float amt, int N) {
@@ -171,8 +183,9 @@ struct Haptik : Module {
         float kCtr = wc * wc;   // centering is intentionally weak vs kSpr: RATE has
                                 // subtle authority by design (audio-rate resonator)
 
-        // Coupling clamped hard at 0.9 — this is the stability guarantee
-        // (ω_max = sqrt(kCtr + 4·kSpr) < 2 for symplectic Euler). Do not raise.
+        // Coupling clamped hard at 0.9 keeps the *homogeneous* system stable
+        // (ω_max = sqrt(kCtr + 4·kSpr) < 2 for symplectic Euler) — do not raise.
+        // Forced/lossless boundedness is handled separately by the STATE_MAX clamp.
         float kSpr = clamp(params[COUPLE_PARAM].getValue()
                          + inputs[COUPLE_INPUT].getVoltage() * params[COUPLE_ATT_PARAM].getValue() * CV_DEPTH,
                          0.f, 0.9f);
@@ -220,8 +233,15 @@ struct Haptik : Module {
             // Driver force folded in here: (v+a)·gamma + drive·gamma == (v+a+drive)·gamma.
             v[driverIdx] += drive * gamma;
 
-            for (int i = 0; i < N; i++)
-                y[i] += v[i];
+            // Bound the state itself. The ω_max<2 proof only covers the homogeneous
+            // system; external forcing (TRIG, EXT IN) with DAMP=0 (lossless) can pump
+            // energy without bound. This generous clamp is never reached in normal play
+            // (|y|~1-2) and degrades runaway to bounded saturation instead of NaN.
+            // Both must be clamped: clamping y alone lets v keep integrating and snap.
+            for (int i = 0; i < N; i++) {
+                y[i] = clamp(y[i] + v[i], -STATE_MAX, STATE_MAX);
+                v[i] = clamp(v[i], -STATE_MAX, STATE_MAX);
+            }
         }
 
         // ── scan readout (always) ──
@@ -243,6 +263,14 @@ struct Haptik : Module {
         outputs[OUT_OUTPUT].setVoltage(5.f * std::tanh(dcBlock.highpass() * OUT_GAIN));
         // MOTION taps mass 0 directly (audio-rate in this design); not high-passed.
         outputs[MOTION_OUTPUT].setVoltage(clamp(y[0] * MOTION_GAIN, -5.f, 5.f));
+
+        // ── refresh display snapshot (~45 Hz) ──
+        if (++dispClock >= (int)(fs / 45.f)) {
+            dispClock = 0;
+            std::copy(y, y + N, dispY);
+            dispN = N;
+            dispDriver = driverIdx;
+        }
     }
 };
 
@@ -257,6 +285,7 @@ struct RingDisplay : Widget {
     Haptik* module = nullptr;
     float dispPeak = 0.6f;   // smoothed peak |y| for auto-scaling the radius
     double lastT  = 0.0;     // last frame time, for time-based smoothing
+    std::shared_ptr<Font> font;   // cached once (loaded lazily in drawLayer)
 
     // Decorative shape shown in the module browser (no running module).
     static float demoShape(int i, int N) {
@@ -282,7 +311,7 @@ struct RingDisplay : Widget {
             const float R = halfmin * 0.66f, targetAmp = halfmin * 0.31f;
             const float rmin = halfmin * 0.10f, rmax = halfmin * 0.97f;
 
-            int N = (module && module->last_N >= 2) ? module->last_N : 64;
+            int N = (module && module->dispN >= 2) ? module->dispN : 64;
             bool freeze = module && module->params[Haptik::FREEZE_PARAM].getValue() > 0.5f;
 
             // Auto-scale: normalise the ring to a smoothed peak displacement so it stays
@@ -290,7 +319,7 @@ struct RingDisplay : Widget {
             // new pluck fit quickly; slow (~1.2 s) release damps the shrink as it decays.
             float peak = 1e-4f;
             for (int i = 0; i < N; i++) {
-                float yi = module ? module->y[i] : demoShape(i, N);
+                float yi = module ? module->dispY[i] : demoShape(i, N);
                 peak = std::max(peak, std::fabs(yi));
             }
             double t = system::getTime();
@@ -301,7 +330,7 @@ struct RingDisplay : Widget {
             dispPeak = std::max(dispPeak, 0.05f);   // floor: silence stays small, not amplified
 
             auto radiusAt = [&](int i) {
-                float yi = module ? module->y[i] : demoShape(i, N);
+                float yi = module ? module->dispY[i] : demoShape(i, N);
                 float norm = clamp(yi / dispPeak, -1.4f, 1.4f);
                 return clamp(R + norm * targetAmp, rmin, rmax);
             };
@@ -356,7 +385,7 @@ struct RingDisplay : Widget {
                 }
 
             // Driver mass node (orange: glow + core).
-            int drv = clamp(module ? module->driverIdx : N / 4, 0, N - 1);
+            int drv = clamp(module ? module->dispDriver : N / 4, 0, N - 1);
             {
                 float th = ang((float)drv), r = radiusAt(drv);
                 float px = cx + r * std::cos(th), py = cy + r * std::sin(th);
@@ -391,8 +420,8 @@ struct RingDisplay : Widget {
             nvgFillColor(args.vg, nvgRGBA(0x88, 0xcc, 0xff, 0x90)); nvgFill(args.vg);
 
             // Screen text: title (top-left), RUN/FREEZE status (top-right), N (bottom-left).
-            std::shared_ptr<Font> font = APP->window->loadFont(
-                asset::system("res/fonts/DejaVuSans.ttf"));
+            if (!font)
+                font = APP->window->loadFont(asset::system("res/fonts/DejaVuSans.ttf"));
             if (font) {
                 nvgFontFaceId(args.vg, font->handle);
                 nvgFontSize(args.vg, mm2px(3.4f));
@@ -424,12 +453,13 @@ struct RingDisplay : Widget {
 // ─── Widget ─────────────────────────────────────────────────────────────────
 
 struct HaptikWidget : ModuleWidget {
+    std::shared_ptr<Font> font;   // cached once (loaded lazily in draw)
 
     void draw(const DrawArgs& args) override {
         ModuleWidget::draw(args);
 
-        std::shared_ptr<Font> font = APP->window->loadFont(
-            asset::system("res/fonts/DejaVuSans.ttf"));
+        if (!font)
+            font = APP->window->loadFont(asset::system("res/fonts/DejaVuSans.ttf"));
         if (!font) return;
 
         nvgSave(args.vg);

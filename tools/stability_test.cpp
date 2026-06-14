@@ -17,6 +17,7 @@
 static const int MAX_N = 256;
 static float y[MAX_N], v[MAX_N];
 static int driverIdx;
+static const float STATE_MAX = 16.f;   // matches src/Haptik.cpp
 
 static void seedBump(int N) {
     std::fill(y, y + MAX_N, 0.f); std::fill(v, v + MAX_N, 0.f);
@@ -31,7 +32,7 @@ static void seedBump(int N) {
 // Runs the dynamics; returns max|y| (INFINITY if it ever goes non-finite).
 // If period!=null, also measures the scan period in samples.
 static double run(int N, float fEvo, float kSpr, float damp, float fs,
-                  long samples, float pitchHz, double* period) {
+                  long samples, float pitchHz, double* period, float drive = 0.f) {
     seedBump(N);
     float wc = 2.f * (float)M_PI * fEvo / fs, kCtr = wc * wc;
     float gamma = std::exp(-damp * 800.f / fs);   // DAMP_MAX_HZ = 800
@@ -42,8 +43,10 @@ static double run(int N, float fEvo, float kSpr, float damp, float fs,
         for (int i = 1; i < N-1; i++)
             v[i] = (v[i] + kSpr*(y[i-1]-2*y[i]+y[i+1]) - kCtr*y[i]) * gamma + 1e-20f;
         v[N-1] = (v[N-1] + kSpr*(y[N-2]-2*y[N-1]+y[0]) - kCtr*y[N-1]) * gamma + 1e-20f;
+        v[driverIdx] += drive * gamma;
         for (int i = 0; i < N; i++) {
-            y[i] += v[i];
+            y[i] = std::max(-STATE_MAX, std::min(STATE_MAX, y[i] + v[i]));
+            v[i] = std::max(-STATE_MAX, std::min(STATE_MAX, v[i]));
             if (!std::isfinite(y[i])) return INFINITY;
             double a = std::fabs(y[i]); if (a > maxabs) maxabs = a;
         }
@@ -76,6 +79,13 @@ int main() {
     double m = run(128, 30.f, 0.9f, 0.f, fs, 500000, 261.626f, nullptr);
     printf("    max|y|=%.4f  %s\n", m, std::isfinite(m) ? "PASS" : "FAIL");
     ok = ok && std::isfinite(m);
+
+    printf("[4] Forced + lossless (DAMP=0, constant EXT drive), 1M samples\n");
+    double mf = run(64, 3.f, 0.3f, 0.f, fs, 1000000, 261.626f, nullptr, 0.5f);
+    bool fb = std::isfinite(mf) && mf <= STATE_MAX + 1e-3;
+    printf("    max|y|=%.4f (clamp %.0f)  %s\n", mf, STATE_MAX,
+           fb ? "PASS (bounded by clamp)" : "FAIL");
+    ok = ok && fb;
 
     printf("%s\n", ok ? "ALL PASS" : "FAILURES PRESENT");
     return ok ? 0 : 1;
