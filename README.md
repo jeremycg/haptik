@@ -2,6 +2,8 @@
 
 A scanned-synthesis oscillator for VCV Rack 2.
 
+![Haptik](doc/screenshot.png)
+
 Haptik builds its waveform from a little physical system: a ring of masses joined
 by springs. You set the ring moving (a pluck, a bump, noise, or an external
 signal), and a phase pointer sweeps around the ring at audio rate, reading off
