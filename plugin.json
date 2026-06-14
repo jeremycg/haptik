@@ -1,0 +1,27 @@
+{
+  "slug": "Haptik",
+  "name": "Haptik",
+  "version": "2.0.0",
+  "license": "GPL-3.0-only",
+  "brand": "Haptik",
+  "author": "Jeremy Gray",
+  "authorEmail": "jeremycgray@gmail.com",
+  "authorUrl": "https://github.com/jeremycg",
+  "pluginUrl": "",
+  "manualUrl": "",
+  "sourceUrl": "https://github.com/jeremycg/haptik",
+  "changelogUrl": "",
+  "modules": [
+    {
+      "slug": "Haptik",
+      "name": "Haptik",
+      "description": "Scanned-synthesis oscillator: a slow mass-spring ring scanned at audio rate",
+      "manualUrl": "",
+      "modularGridUrl": "",
+      "tags": [
+        "Oscillator",
+        "Physical Modeling"
+      ]
+    }
+  ]
+}

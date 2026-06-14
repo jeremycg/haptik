@@ -1,0 +1,13 @@
+# Build output
+/build/
+/dist/
+/dep/
+plugin.so
+plugin.dll
+plugin.dylib
+
+# WSL "downloaded from the internet" marker files
+*Zone.Identifier
+
+# Claude Code local settings
+.claude/
