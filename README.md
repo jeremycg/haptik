@@ -30,14 +30,18 @@ own terms; the scan just decides how fast you read it. Freeze the shape and you
 have a wavetable; let it ring and the wavetable morphs while it plays; drive it
 from EXT IN and the ring resonates the input like a string body.
 
-In the original (haptic) conception the dynamics evolve *slowly* — in the 0–15 Hz
-"haptic" band — so you scan a shape that drifts gently. **Haptik v1 runs the ring
-at audio rate** (the dynamics step every sample, with no rate divider), so its
-internal modes sit in the audible range and the voice behaves like a cross between
-a wavetable oscillator and a Karplus–Strong resonator. One consequence: **COUPLE
-is the dominant timbral control**, while **RATE** (the centering force) has a
-comparatively subtle effect. A slow/haptic mode is a candidate for a future
-version.
+The **MODE** switch picks how fast the ring itself evolves:
+
+- **Fast** (default) steps the lattice every sample, so its modes sit in the
+  audible range and the voice behaves like a cross between a wavetable oscillator
+  and a Karplus–Strong resonator. Here **COUPLE is the dominant timbral control**
+  and **RATE** is subtle.
+- **Slow** steps the lattice only every 256 samples, with the coefficients
+  rescaled to that longer timestep. The modes drop into the 0–15 Hz "haptic"
+  band — the original conception — so you scan a *slowly-morphing* wavetable,
+  **RATE becomes a real evolution-rate control**, and FREEZE captures a clean
+  table. Inter-frame interpolation keeps the morph smooth (no stepping), and the
+  centering term is clamped so the divided step stays stable.
 
 ## Controls
 
@@ -52,6 +56,7 @@ version.
 | **EXCITE** | impulse / bump / noise / drive | excitation shape applied on TRIG |
 | **DRIVER** | 0–100% | where excitation / EXT IN enters the ring (default 25%) |
 | **FREEZE** | Run / Freeze | hold the current shape as a static tone |
+| **MODE** | Fast / Slow | audio-rate resonator vs haptic-rate morphing wavetable |
 
 CV inputs (RATE, COUPLE, DAMP, INJECT) each have an attenuverter. **V/OCT** sums
 with PITCH. **TRIG** re-excites with the current EXCITE shape on each rising edge.

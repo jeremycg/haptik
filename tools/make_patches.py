@@ -22,7 +22,7 @@ LOG2_3 = math.log2(3.0)   # RATE = 3 Hz expressed as log2(Hz)
 
 def haptik(params, pos):
     return {"id": uid(), "plugin": "Haptik", "model": "Haptik",
-            "version": "2.0.0", "params": params, "pos": pos}
+            "version": "2.1.0", "params": params, "pos": pos}
 
 def hp(N=64, pitch=0.0, rate=LOG2_3, couple=0.3, damp=0.35, inject=0.6,
        excite=1, freeze=0.0):
