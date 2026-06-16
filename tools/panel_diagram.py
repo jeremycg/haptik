@@ -70,8 +70,9 @@ ax.text(dx+dw-4,dy+5,"FREEZE",ha="right",va="center",fontsize=4.5,color="#6ab0ff
 
 # ── controls below ──
 # Zone A: voice knobs
-circ("N",12,64,D_KNOB,"#333344"); circ("PITCH",28,64,D_KNOB,"#333344")
-circ("EXC",44,64,D_KNOB,"#333344"); circ("DRV",60,64,D_KNOB,"#333344"); sw("FRZ",76,64)
+circ("N",11,64,D_KNOB,"#333344"); circ("PITCH",26,64,D_KNOB,"#333344")
+circ("EXC",41,64,D_KNOB,"#333344"); circ("DRV",56,64,D_KNOB,"#333344")
+sw("FRZ",70,64); sw("MODE",81,64)
 # Zone B: CV channel strips (knob / att / jack)
 for x,nm in [(13,"RATE"),(32,"COUP"),(51,"DAMP"),(70,"INJ")]:
     circ(nm,x,82,D_KNOB,"#333344"); circ(nm+".a",x,93,D_TRIM,"#555533"); circ(nm+".cv",x,102,D_JACK,"#224444")

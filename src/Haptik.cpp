@@ -23,6 +23,7 @@ struct Haptik : Module {
         DAMP_ATT_PARAM,
         INJECT_ATT_PARAM,
         DRIVER_PARAM,        // appended last: keeps existing positional param IDs stable
+        MODE_PARAM,          // Fast (audio-rate) / Slow (haptic divider)
         PARAMS_LEN
     };
 
@@ -50,9 +51,11 @@ struct Haptik : Module {
     // ─── Persistent state ───────────────────────────────────────────────────
     float y[MAX_N] = {};            // displacement
     float v[MAX_N] = {};            // velocity
+    float yPrev[MAX_N] = {};        // slow-mode: lattice state at the previous step (for interp)
     float scanPhase = 0.f;          // [0,1) scan pointer
     int   last_N    = -1;           // -1 forces reinit on first process()
     int   driverIdx = 0;            // mass that excitation / EXT IN drives
+    int   divCounter = 0;           // slow-mode: samples since the last lattice step
     dsp::SchmittTrigger trig;
     dsp::TRCFilter<float> dcBlock;  // fixed internal DC blocker on OUT
     float lastFs = 0.f;             // detects SR change to refresh dcBlock cutoff
@@ -73,6 +76,8 @@ struct Haptik : Module {
     static constexpr float CV_DEPTH        = 0.1f;   // ±5V CV → ±0.5 at full attenuverter
     static constexpr float DRIVE_KEEPALIVE = 0.05f;  // continuous-drive noise amount (EXCITE=3)
     static constexpr float STATE_MAX       = 16.f;   // safety clamp on y[]/v[] (forced/lossless guard)
+    static constexpr int   SLOW_DIV        = 256;    // slow-mode: step the lattice every N samples
+    static constexpr float KCTR_MAX        = 0.35f;  // clamp centering so per-update ω_max < 2 (slow mode)
 
     Haptik() {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
@@ -89,6 +94,8 @@ struct Haptik : Module {
         configParam(EXCITE_PARAM, 0.f, 3.f, 1.f, "Excitation")->snapEnabled = true;
 
         configSwitch(FREEZE_PARAM, 0.f, 1.f, 0.f, "Freeze", {"Run", "Freeze"});
+        configSwitch(MODE_PARAM, 0.f, 1.f, 0.f, "Mode",
+                     {"Fast (audio-rate resonator)", "Slow (haptic morph)"});
 
         configParam(RATE_ATT_PARAM, -1.f, 1.f, 0.f, "Rate CV");
         configParam(COUPLE_ATT_PARAM, -1.f, 1.f, 0.f, "Couple CV");
@@ -169,7 +176,9 @@ struct Haptik : Module {
         if (N != last_N) {
             std::fill(y, y + MAX_N, 0.f);
             std::fill(v, v + MAX_N, 0.f);
+            std::fill(yPrev, yPrev + MAX_N, 0.f);
             scanPhase = 0.f;
+            divCounter = 0;
             applyExcite(1, 1.f, N);            // always a full bump (ignores EXCITE/INJECT) so it sounds on load
             last_N = N;
         }
@@ -178,10 +187,15 @@ struct Haptik : Module {
         // RATE_PARAM stores log2(Hz); CV adds in the log domain, att·CV_DEPTH scaled.
         float rateLog = params[RATE_PARAM].getValue()
                       + inputs[RATE_INPUT].getVoltage() * params[RATE_ATT_PARAM].getValue() * CV_DEPTH;
+        bool  slow = params[MODE_PARAM].getValue() > 0.5f;
+        int   D    = slow ? SLOW_DIV : 1;   // lattice steps every D samples
+
         float fEvo = clamp(std::exp2(rateLog), 0.05f, 30.f);
-        float wc   = 2.f * (float)M_PI * fEvo / fs;
-        float kCtr = wc * wc;   // centering is intentionally weak vs kSpr: RATE has
-                                // subtle authority by design (audio-rate resonator)
+        // Effective timestep is D samples. In Fast mode (D=1) this is the original
+        // behaviour: kCtr stays tiny so RATE is subtle. In Slow mode the D factor
+        // makes RATE/centering meaningful; the clamp keeps per-update ω_max < 2.
+        float wc   = 2.f * (float)M_PI * fEvo * D / fs;
+        float kCtr = std::min(wc * wc, KCTR_MAX);
 
         // Coupling clamped hard at 0.9 keeps the *homogeneous* system stable
         // (ω_max = sqrt(kCtr + 4·kSpr) < 2 for symplectic Euler) — do not raise.
@@ -193,7 +207,8 @@ struct Haptik : Module {
         float damp = clamp(params[DAMP_PARAM].getValue()
                          + inputs[DAMP_INPUT].getVoltage() * params[DAMP_ATT_PARAM].getValue() * CV_DEPTH,
                          0.f, 1.f);
-        float gamma = std::exp(-damp * DAMP_MAX_HZ / fs);   // velocity multiplier ≤ 1
+        float gamma = std::exp(-damp * DAMP_MAX_HZ * D / fs);   // velocity multiplier ≤ 1; D-scaled so
+                                                                // wall-clock decay is divider-independent
 
         float amt = clamp(params[INJECT_PARAM].getValue()
                         + inputs[INJECT_INPUT].getVoltage() * params[INJECT_ATT_PARAM].getValue() * CV_DEPTH,
@@ -217,7 +232,13 @@ struct Haptik : Module {
         // ── dynamics: symplectic Euler, two passes (skip if frozen) ──
         // Pass 1 reads only y[] (one snapshot) to form all accelerations;
         // pass 2 reads only v[]. The ordering is required for correctness.
-        if (!freeze) {
+        // ── dynamics: symplectic Euler, two passes ──
+        // Fast mode steps every sample; Slow mode steps every D samples (divCounter==0)
+        // and keeps yPrev so the readout can interpolate between frames (no stepping).
+        bool stepNow = !freeze && (!slow || divCounter == 0);
+        if (stepNow) {
+            if (slow) std::copy(y, y + N, yPrev);   // snapshot pre-step for inter-frame lerp
+
             // Velocity pass. Interior masses need no index wrap; the two ring-seam
             // masses are handled out of the hot loop to keep it modulo-free.
             // +1e-20f flushes denormals on long DAMP=0 tails (inaudible, DC-blocked).
@@ -251,8 +272,22 @@ struct Haptik : Module {
         scanPhase -= std::floor(scanPhase);
         float p   = scanPhase * N;
         int   i0  = std::min((int) p, N - 1);    // guard against p == N at phase rounding
+        int   i1  = (i0 + 1) % N;
         float f   = p - i0;
-        float s   = y[i0] + f * (y[(i0 + 1) % N] - y[i0]);
+        float s;
+        if (slow && !freeze) {
+            // Interpolate the two readout points between the previous and current
+            // lattice frame (fr = samples since last step / D) so the held shape
+            // ramps smoothly instead of stepping every D samples.
+            float fr = (float) divCounter / (float) D;
+            float a0 = yPrev[i0] + fr * (y[i0] - yPrev[i0]);
+            float a1 = yPrev[i1] + fr * (y[i1] - yPrev[i1]);
+            s = a0 + f * (a1 - a0);
+        } else {
+            s = y[i0] + f * (y[i1] - y[i0]);
+        }
+        if (slow && !freeze)                     // advance AFTER the readout (frame continuity)
+            divCounter = (divCounter + 1) % D;
 
         // ── outputs ──
         if (fs != lastFs) {                      // recompute only on SR change (still
@@ -476,11 +511,12 @@ struct HaptikWidget : ModuleWidget {
         };
 
         // Voice row labels (below each knob/switch at y=64)
-        lbl(12.f, 70.f, 1.9f, dim, "N");
-        lbl(28.f, 70.f, 1.9f, dim, "PITCH");
-        lbl(44.f, 70.f, 1.9f, dim, "EXCITE");
-        lbl(60.f, 70.f, 1.9f, dim, "DRIVER");
-        lbl(76.f, 70.f, 1.9f, dim, "FREEZE");
+        lbl(11.f, 70.f, 1.7f, dim, "N");
+        lbl(26.f, 70.f, 1.7f, dim, "PITCH");
+        lbl(41.f, 70.f, 1.7f, dim, "EXCITE");
+        lbl(56.f, 70.f, 1.7f, dim, "DRIVER");
+        lbl(70.f, 70.f, 1.7f, dim, "FREEZE");
+        lbl(81.f, 70.f, 1.7f, dim, "MODE");
 
         // CV channel-strip labels (above each knob at y=82)
         lbl(13.f, 76.f, 1.9f, dim, "RATE");
@@ -514,12 +550,13 @@ struct HaptikWidget : ModuleWidget {
         ring->box.size = mm2px(Vec(78.f, 46.f));
         addChild(ring);
 
-        // Voice row (y=64): N | PITCH | EXCITE | DRIVER | FREEZE
-        addParam(createParamCentered<RoundBlackSnapKnob>(mm2px(Vec(12.f, 64.f)), module, Haptik::N_PARAM));
-        addParam(createParamCentered<RoundBlackKnob>(    mm2px(Vec(28.f, 64.f)), module, Haptik::PITCH_PARAM));
-        addParam(createParamCentered<RoundBlackSnapKnob>(mm2px(Vec(44.f, 64.f)), module, Haptik::EXCITE_PARAM));
-        addParam(createParamCentered<RoundBlackKnob>(    mm2px(Vec(60.f, 64.f)), module, Haptik::DRIVER_PARAM));
-        addParam(createParamCentered<CKSS>(              mm2px(Vec(76.f, 64.f)), module, Haptik::FREEZE_PARAM));
+        // Voice row (y=64): N | PITCH | EXCITE | DRIVER | FREEZE | MODE
+        addParam(createParamCentered<RoundBlackSnapKnob>(mm2px(Vec(11.f, 64.f)), module, Haptik::N_PARAM));
+        addParam(createParamCentered<RoundBlackKnob>(    mm2px(Vec(26.f, 64.f)), module, Haptik::PITCH_PARAM));
+        addParam(createParamCentered<RoundBlackSnapKnob>(mm2px(Vec(41.f, 64.f)), module, Haptik::EXCITE_PARAM));
+        addParam(createParamCentered<RoundBlackKnob>(    mm2px(Vec(56.f, 64.f)), module, Haptik::DRIVER_PARAM));
+        addParam(createParamCentered<CKSS>(              mm2px(Vec(70.f, 64.f)), module, Haptik::FREEZE_PARAM));
+        addParam(createParamCentered<CKSS>(              mm2px(Vec(81.f, 64.f)), module, Haptik::MODE_PARAM));
 
         // CV channel strips (knob y=82 / attenuverter y=93 / jack y=102)
         struct Strip { float x; int knob, att, in; };

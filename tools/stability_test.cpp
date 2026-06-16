@@ -32,24 +32,29 @@ static void seedBump(int N) {
 // Runs the dynamics; returns max|y| (INFINITY if it ever goes non-finite).
 // If period!=null, also measures the scan period in samples.
 static double run(int N, float fEvo, float kSpr, float damp, float fs,
-                  long samples, float pitchHz, double* period, float drive = 0.f) {
+                  long samples, float pitchHz, double* period, float drive = 0.f,
+                  int D = 1) {
     seedBump(N);
-    float wc = 2.f * (float)M_PI * fEvo / fs, kCtr = wc * wc;
-    float gamma = std::exp(-damp * 800.f / fs);   // DAMP_MAX_HZ = 800
+    float wc = 2.f * (float)M_PI * fEvo * D / fs;
+    float kCtr = std::min(wc * wc, 0.35f);          // KCTR_MAX clamp (slow mode)
+    float gamma = std::exp(-damp * 800.f * D / fs); // DAMP_MAX_HZ=800, D-scaled
     double maxabs = 0.0; float scanPhase = 0.f;
-    long firstWrap = -1, lastWrap = -1; int wraps = 0;
+    long firstWrap = -1, lastWrap = -1; int wraps = 0; int divc = 0;
     for (long n = 0; n < samples; n++) {
-        v[0] = (v[0] + kSpr*(y[N-1]-2*y[0]+y[1]) - kCtr*y[0]) * gamma + 1e-20f;
-        for (int i = 1; i < N-1; i++)
-            v[i] = (v[i] + kSpr*(y[i-1]-2*y[i]+y[i+1]) - kCtr*y[i]) * gamma + 1e-20f;
-        v[N-1] = (v[N-1] + kSpr*(y[N-2]-2*y[N-1]+y[0]) - kCtr*y[N-1]) * gamma + 1e-20f;
-        v[driverIdx] += drive * gamma;
-        for (int i = 0; i < N; i++) {
-            y[i] = std::max(-STATE_MAX, std::min(STATE_MAX, y[i] + v[i]));
-            v[i] = std::max(-STATE_MAX, std::min(STATE_MAX, v[i]));
-            if (!std::isfinite(y[i])) return INFINITY;
-            double a = std::fabs(y[i]); if (a > maxabs) maxabs = a;
+        if (D <= 1 || divc == 0) {                  // step every D samples
+            v[0] = (v[0] + kSpr*(y[N-1]-2*y[0]+y[1]) - kCtr*y[0]) * gamma + 1e-20f;
+            for (int i = 1; i < N-1; i++)
+                v[i] = (v[i] + kSpr*(y[i-1]-2*y[i]+y[i+1]) - kCtr*y[i]) * gamma + 1e-20f;
+            v[N-1] = (v[N-1] + kSpr*(y[N-2]-2*y[N-1]+y[0]) - kCtr*y[N-1]) * gamma + 1e-20f;
+            v[driverIdx] += drive * gamma;
+            for (int i = 0; i < N; i++) {
+                y[i] = std::max(-STATE_MAX, std::min(STATE_MAX, y[i] + v[i]));
+                v[i] = std::max(-STATE_MAX, std::min(STATE_MAX, v[i]));
+                if (!std::isfinite(y[i])) return INFINITY;
+                double a = std::fabs(y[i]); if (a > maxabs) maxabs = a;
+            }
         }
+        if (D > 1) divc = (divc + 1) % D;
         scanPhase += pitchHz / fs;
         if (scanPhase >= 1.f) { scanPhase -= std::floor(scanPhase); wraps++; if (firstWrap<0) firstWrap=n; lastWrap=n; }
     }
@@ -86,6 +91,17 @@ int main() {
     printf("    max|y|=%.4f (clamp %.0f)  %s\n", mf, STATE_MAX,
            fb ? "PASS (bounded by clamp)" : "FAIL");
     ok = ok && fb;
+
+    printf("[5] Slow mode (D=256): COUPLE 0..0.9, RATE=30Hz (kCtr clamped), forced\n");
+    bool sb = true;
+    for (int k = 0; k <= 90; k += 10) {
+        double m = run(64, 30.f, k / 100.f, 0.f, fs, 300000, 261.626f, nullptr, 0.5f, 256);
+        if (!(std::isfinite(m) && m <= STATE_MAX + 1e-3)) {
+            sb = false; printf("    FAIL COUPLE=%.2f max|y|=%.3f\n", k / 100.f, m);
+        }
+    }
+    printf("    %s\n", sb ? "PASS (bounded with divider + kCtr clamp)" : "FAIL");
+    ok = ok && sb;
 
     printf("%s\n", ok ? "ALL PASS" : "FAILURES PRESENT");
     return ok ? 0 : 1;
