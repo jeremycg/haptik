@@ -25,7 +25,7 @@ def haptik(params, pos):
             "version": "2.1.0", "params": params, "pos": pos}
 
 def hp(N=64, pitch=0.0, rate=LOG2_3, couple=0.3, damp=0.35, inject=0.6,
-       excite=1, freeze=0.0):
+       excite=1, freeze=0.0, driver=0.25, mode=0.0):
     return [
         {"id": 0,  "value": float(N)},
         {"id": 1,  "value": float(pitch)},
@@ -37,6 +37,8 @@ def hp(N=64, pitch=0.0, rate=LOG2_3, couple=0.3, damp=0.35, inject=0.6,
         {"id": 7,  "value": float(freeze)},
         {"id": 8,  "value": 0.0}, {"id": 9, "value": 0.0},
         {"id": 10, "value": 0.0}, {"id": 11, "value": 0.0},
+        {"id": 12, "value": float(driver)},   # DRIVER position (added after v1)
+        {"id": 13, "value": float(mode)},      # MODE: 0 Fast / 1 Slow
     ]
 
 def audio(pos):
