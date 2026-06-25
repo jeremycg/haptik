@@ -1,5 +1,10 @@
 # Haptik
 
+> ⚠️ **Moved — this repository is archived.** Haptik now lives in
+> **[Coalescent](https://github.com/jeremycg/coalescent)**, a single VCV Rack 2
+> plugin that bundles GENDYN, Haptik, and the Axon/Soma neuron pair. Development
+> continues there; this repo is kept for history only.
+
 A scanned-synthesis oscillator for VCV Rack 2.
 
 ![Haptik](doc/screenshot.png)
